@@ -19,5 +19,7 @@
   "overwrite": false,
   "allow_upscale": false,
   "recursive_folder": false,
-  "output_dir": ""
+  "output_dir": "",
+  "encode_mode": "abr",
+  "crf": 18
 }

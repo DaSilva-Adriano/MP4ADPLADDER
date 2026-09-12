@@ -160,12 +160,21 @@ def plan_jobs(
     allow_upscale: bool,
     copy_audio: bool,
     log: Callable[[str], None],
+    encode_mode: str = "abr",
+    crf: float = 18.0,
 ) -> list[EncodeJob]:
     jobs: list[EncodeJob] = []
-    enabled_rungs = [r for r in rungs if r.enabled and r.bitrate_k > 0]
-    if not enabled_rungs:
-        log("No enabled rungs with bitrate > 0.")
-        return jobs
+    mode = "crf" if encode_mode == "crf" else "abr"
+    if mode == "crf":
+        enabled_rungs = [r for r in rungs if r.enabled]
+        if not enabled_rungs:
+            log("No enabled rungs.")
+            return jobs
+    else:
+        enabled_rungs = [r for r in rungs if r.enabled and r.bitrate_k > 0]
+        if not enabled_rungs:
+            log("No enabled rungs with bitrate > 0.")
+            return jobs
     if not fps_targets:
         log("No FPS targets checked.")
         return jobs
@@ -220,7 +229,7 @@ def plan_jobs(
                         f"{info.fps:.3f} fps < {fps} - 0.5 (never up-convert fps)"
                     )
                     continue
-                name = output_name(stem, rung.id, fps)
+                name = output_name(stem, rung.id, fps, crf=crf if mode == "crf" else None)
                 dest = output_dir / name
                 if dest.exists() and not overwrite:
                     log(f"Skip existing {name} (overwrite off)")
@@ -239,6 +248,8 @@ def plan_jobs(
                         clip_duration=clip.duration_s,
                         output=dest,
                         audio_mode=audio_mode,
+                        mode=mode,
+                        crf=float(crf),
                     )
                 )
     return jobs

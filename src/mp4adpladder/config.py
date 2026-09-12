@@ -13,6 +13,8 @@ from mp4adpladder.ladder import FPS_CHOICES, RungState, default_rungs, rungs_fro
 APP_NAME = "MP4ADPLADDER"
 DEFAULT_FFMPEG_DIR = r"C:\VSR\ffmpeg-9.0.1-full_build\bin"
 CLIP_MODES = ("middle", "start", "end")
+ENCODE_MODES = ("abr", "crf")
+DEFAULT_CRF = 18.0
 VIDEO_EXTENSIONS = (".mkv", ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mxf", ".hevc", ".y4m")
 
 
@@ -46,6 +48,8 @@ class AppConfig:
     allow_upscale: bool = False
     recursive_folder: bool = False
     output_dir: str = ""
+    encode_mode: str = "abr"
+    crf: float = DEFAULT_CRF
 
     def enabled_fps(self) -> list[int]:
         out: list[int] = []
@@ -66,6 +70,8 @@ class AppConfig:
             "allow_upscale": bool(self.allow_upscale),
             "recursive_folder": bool(self.recursive_folder),
             "output_dir": self.output_dir,
+            "encode_mode": self.encode_mode,
+            "crf": float(self.crf),
         }
 
     @classmethod
@@ -86,6 +92,10 @@ class AppConfig:
             duration = 10.0
         if duration <= 0:
             duration = 10.0
+        encode_mode = str(data.get("encode_mode", "abr")).lower()
+        if encode_mode not in ENCODE_MODES:
+            encode_mode = "abr"
+        crf = _parse_crf(data.get("crf", DEFAULT_CRF))
         return cls(
             ffmpeg_dir=str(data.get("ffmpeg_dir", DEFAULT_FFMPEG_DIR) or DEFAULT_FFMPEG_DIR),
             rungs=rungs_from_config(data.get("rungs")),
@@ -97,7 +107,19 @@ class AppConfig:
             allow_upscale=bool(data.get("allow_upscale", False)),
             recursive_folder=bool(data.get("recursive_folder", False)),
             output_dir=str(data.get("output_dir", "") or ""),
+            encode_mode=encode_mode,
+            crf=crf,
         )
+
+
+def _parse_crf(raw: Any) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_CRF
+    if value != value:  # NaN
+        return DEFAULT_CRF
+    return max(0.0, min(51.0, value))
 
 
 def load_config() -> AppConfig:

@@ -1,4 +1,4 @@
-"""2-pass libx265 encode: source → one ladder rung (no intermediate 4K)."""
+"""libx265 encode: 2-pass ABR or single-pass CRF, source → one ladder rung."""
 
 from __future__ import annotations
 
@@ -29,12 +29,19 @@ class EncodeJob:
     clip_duration: float
     output: Path
     audio_mode: str  # "none" | "copy" | "aac"
+    mode: str = "abr"  # "abr" | "crf"
+    crf: float = 18.0
     pass_index: int = 1
+
+    @property
+    def pass_total(self) -> int:
+        return 1 if self.mode == "crf" else 2
 
 
 @dataclass
 class EncodeProgress:
     pass_index: int
+    pass_total: int = 2
     frame: int | None = None
     fps: str = ""
     speed: str = ""
@@ -97,6 +104,20 @@ def _x265_params(pass_index: int, stats_name: str) -> str:
     return f"pass={pass_index}:stats={stats_name}"
 
 
+def _fmt_crf(crf: float) -> str:
+    if abs(crf - round(crf)) < 1e-6:
+        return str(int(round(crf)))
+    return f"{crf:.2f}".rstrip("0").rstrip(".")
+
+
+def _audio_args(job: EncodeJob) -> list[str]:
+    if job.audio_mode == "copy":
+        return ["-map", "0:a:0?", "-c:a", "copy"]
+    if job.audio_mode == "aac":
+        return ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"]
+    return ["-an"]
+
+
 def build_ffmpeg_cmd(
     ffmpeg: Path,
     job: EncodeJob,
@@ -105,7 +126,6 @@ def build_ffmpeg_cmd(
     output_target: str,
 ) -> list[str]:
     pre, post = seek_args(job.clip_start, job.clip_duration)
-    b = int(job.bitrate_k)
     vf = _filtergraph(job.width, job.height, job.fps)
     cmd: list[str] = [
         str(ffmpeg),
@@ -135,6 +155,17 @@ def build_ffmpeg_cmd(
             "main",
             "-tag:v",
             "hvc1",
+        ]
+    )
+    if job.mode == "crf":
+        cmd.extend(["-crf", _fmt_crf(job.crf)])
+        cmd.extend(_audio_args(job))
+        cmd.extend(["-movflags", "+faststart", output_target])
+        return cmd
+
+    b = int(job.bitrate_k)
+    cmd.extend(
+        [
             "-b:v",
             f"{b}k",
             "-maxrate",
@@ -148,17 +179,14 @@ def build_ffmpeg_cmd(
     if pass_index == 1:
         cmd.extend(["-an", "-f", "null", NUL])
     else:
-        if job.audio_mode == "copy":
-            cmd.extend(["-map", "0:a:0?", "-c:a", "copy"])
-        elif job.audio_mode == "aac":
-            cmd.extend(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"])
-        else:
-            cmd.append("-an")
+        cmd.extend(_audio_args(job))
         cmd.extend(["-movflags", "+faststart", output_target])
     return cmd
 
 
-def _parse_progress_kv(buf: dict[str, str], pass_index: int, duration_s: float) -> EncodeProgress:
+def _parse_progress_kv(
+    buf: dict[str, str], pass_index: int, duration_s: float, pass_total: int = 2
+) -> EncodeProgress:
     frame = None
     if buf.get("frame", "").isdigit():
         frame = int(buf["frame"])
@@ -180,7 +208,7 @@ def _parse_progress_kv(buf: dict[str, str], pass_index: int, duration_s: float) 
     fraction = 0.0
     if time_s is not None and duration_s > 0:
         fraction = max(0.0, min(1.0, time_s / duration_s))
-    parts = [f"pass {pass_index}/2"]
+    parts = [f"pass {pass_index}/{pass_total}"]
     if fps:
         parts.append(f"fps={fps}")
     if speed:
@@ -189,6 +217,7 @@ def _parse_progress_kv(buf: dict[str, str], pass_index: int, duration_s: float) 
         parts.append(f"frame={frame}")
     return EncodeProgress(
         pass_index=pass_index,
+        pass_total=pass_total,
         frame=frame,
         fps=fps,
         speed=speed,
@@ -244,6 +273,7 @@ def _run_one_pass(
     cancel: threading.Event,
     holder: ProcHolder,
     on_progress,
+    pass_total: int = 2,
 ) -> EncodeResult:
     startupinfo = None
     if hasattr(subprocess, "STARTUPINFO"):
@@ -293,7 +323,7 @@ def _run_one_pass(
                         key, _, val = item.partition("=")
                         kv[key.strip()] = val.strip()
                         if key.strip() == "progress":
-                            on_progress(_parse_progress_kv(kv, pass_index, duration_s))
+                            on_progress(_parse_progress_kv(kv, pass_index, duration_s, pass_total))
             except queue.Empty:
                 pass
             try:
@@ -335,7 +365,7 @@ def encode_job(
     holder: ProcHolder,
     on_progress,
 ) -> EncodeResult:
-    """Run pass 1 to NUL, pass 2 to the output file. Unique stats file in work_dir."""
+    """ABR: pass 1 to NUL, pass 2 to file. CRF: single pass to file."""
     work_dir.mkdir(parents=True, exist_ok=True)
     job.output.parent.mkdir(parents=True, exist_ok=True)
     stats_name = "x265-2pass.log"
@@ -344,8 +374,20 @@ def encode_job(
     if cancel.is_set():
         return EncodeResult(ok=False, cancelled=True, message="Cancelled")
 
+    if job.mode == "crf":
+        cmd = build_ffmpeg_cmd(ffmpeg, job, 1, stats_name, out_path)
+        result = _run_one_pass(
+            cmd, work_dir, 1, job.clip_duration, cancel, holder, on_progress, pass_total=1
+        )
+        if not result.ok:
+            _remove_if_exists(job.output)
+            return result
+        if not job.output.is_file():
+            return EncodeResult(ok=False, message="CRF encode finished but output file is missing")
+        return result
+
     cmd1 = build_ffmpeg_cmd(ffmpeg, job, 1, stats_name, NUL)
-    r1 = _run_one_pass(cmd1, work_dir, 1, job.clip_duration, cancel, holder, on_progress)
+    r1 = _run_one_pass(cmd1, work_dir, 1, job.clip_duration, cancel, holder, on_progress, pass_total=2)
     if not r1.ok:
         _remove_if_exists(job.output)
         return r1
@@ -355,7 +397,7 @@ def encode_job(
         return EncodeResult(ok=False, cancelled=True, message="Cancelled")
 
     cmd2 = build_ffmpeg_cmd(ffmpeg, job, 2, stats_name, out_path)
-    r2 = _run_one_pass(cmd2, work_dir, 2, job.clip_duration, cancel, holder, on_progress)
+    r2 = _run_one_pass(cmd2, work_dir, 2, job.clip_duration, cancel, holder, on_progress, pass_total=2)
     if not r2.ok:
         _remove_if_exists(job.output)
         return r2

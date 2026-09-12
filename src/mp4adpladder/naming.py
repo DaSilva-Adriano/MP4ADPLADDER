@@ -1,4 +1,4 @@
-"""Output filename sanitization: {stem}_adp-{rung}-{fps}fps.mp4"""
+"""Output filenames: {stem}_adp-{rung}-{fps}fps.mp4 or {stem}_crf-{rung}-{fps}fps.mp4"""
 
 from __future__ import annotations
 
@@ -20,8 +20,15 @@ def sanitize_stem(name: str) -> str:
     return cleaned or "source"
 
 
-def output_name(stem: str, rung_id: str, fps: int) -> str:
-    return f"{sanitize_stem(stem)}_adp-{rung_id}-{int(fps)}fps.mp4"
+def format_crf_tag(crf: float) -> str:
+    if abs(crf - round(crf)) < 1e-6:
+        return str(int(round(crf)))
+    return f"{crf:.2f}".rstrip("0").rstrip(".")
+
+
+def output_name(stem: str, rung_id: str, fps: int, crf: float | None = None) -> str:
+    tag = "crf" if crf is not None else "adp"
+    return f"{sanitize_stem(stem)}_{tag}-{rung_id}-{int(fps)}fps.mp4"
 
 
 def default_output_dir(first_source: Path) -> Path:

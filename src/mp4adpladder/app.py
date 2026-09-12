@@ -17,6 +17,7 @@ from mp4adpladder import __version__
 from mp4adpladder.clip import compute_clip
 from mp4adpladder.config import (
     APP_NAME,
+    DEFAULT_CRF,
     VIDEO_EXTENSIONS,
     AppConfig,
     load_config,
@@ -26,17 +27,21 @@ from mp4adpladder.encode import EncodeJob, EncodeProgress, EncodeResult
 from mp4adpladder.ffmpeg_tools import FFmpegError, FFmpegTools, resolve_tools
 from mp4adpladder.jobs import JobController, SourceEntry, plan_jobs
 from mp4adpladder.ladder import FPS_CHOICES, default_rungs, format_gb_h
-from mp4adpladder.naming import default_output_dir
+from mp4adpladder.naming import default_output_dir, format_crf_tag
 from mp4adpladder.probe import ProbeError, ProbeInfo, collect_video_files, probe_file
 from mp4adpladder.timefmt import format_fps, format_hms
 
-HELP_TEXT = """Bitrates = Tableau 1 midpoints (streaming GB/h), not CRF.
+HELP_TEXT = """ABR (default): bitrates = Tableau 1 midpoints (streaming GB/h).
 2-pass ABR ≈ constant average rate.
+CRF: single-pass x265, default CRF 18 (0 = lossless-ish, 51 = worst). Same CRF
+at every enabled resolution. CRF files use _crf- in the name (not _adp-).
+
 Later VSR reference = the adp-4k file from the SAME source and clip window.
 
 Each rung encodes source → that resolution (no intermediate 4K file).
-libx265 Main, yuv420p, -tag:v hvc1, +faststart, 2-pass, -preset medium.
--maxrate 1.25×b:v, -bufsize 2×b:v. Video-only unless Copy audio is checked.
+libx265 Main, yuv420p, -tag:v hvc1, +faststart, -preset medium.
+ABR: 2-pass, -maxrate 1.25×b:v, -bufsize 2×b:v.
+Video-only unless Copy audio is checked.
 
 FPS is never up-converted. A target is used only if source_fps ≥ target − 0.5
 (so 23.976 may output 24). Checking 60 on a 24 fps source skips 60.
@@ -44,7 +49,7 @@ FPS is never up-converted. A target is used only if source_fps ≥ target − 0.
 Clip default is 10 s, middle of the file. Seek uses fast input -ss with a 10 s
 preroll plus an accurate post-input -ss (covers keyframe drift > 0.25 s).
 
-Outputs: {stem}_adp-{rung}-{fps}fps.mp4  e.g. film_adp-720p-24fps.mp4
+Outputs: {stem}_adp-{rung}-{fps}fps.mp4   or   {stem}_crf-{rung}-{fps}fps.mp4
 """
 
 VIDEO_FILETYPES = (
@@ -93,6 +98,8 @@ class MP4ADPLadderApp(ctk.CTk):
         self.overwrite_var = ctk.BooleanVar(value=self.cfg.overwrite)
         self.copy_audio_var = ctk.BooleanVar(value=self.cfg.copy_audio)
         self.allow_upscale_var = ctk.BooleanVar(value=self.cfg.allow_upscale)
+        self.encode_mode_var = ctk.StringVar(value=self.cfg.encode_mode if self.cfg.encode_mode in {"abr", "crf"} else "abr")
+        self.crf_var = ctk.StringVar(value=_fmt_num(self.cfg.crf if self.cfg.crf is not None else DEFAULT_CRF))
         self.clip_mode_var = ctk.StringVar(value=self.cfg.clip_mode)
         self.clip_dur_var = ctk.StringVar(value=_fmt_num(self.cfg.clip_duration_s))
         self.fps_vars = {
@@ -347,11 +354,37 @@ class MP4ADPLadderApp(ctk.CTk):
         ctk.CTkLabel(frame, text="Options", font=ctk.CTkFont(size=14, weight="bold")).pack(
             anchor="w", padx=12, pady=(8, 8)
         )
+        ctk.CTkLabel(frame, text="Encode", font=ctk.CTkFont(size=13, weight="bold")).pack(
+            anchor="w", padx=12, pady=(0, 4)
+        )
+        mode_row = ctk.CTkFrame(frame, fg_color="transparent")
+        mode_row.pack(anchor="w", padx=12)
+        ctk.CTkRadioButton(
+            mode_row,
+            text="ABR (2-pass)",
+            value="abr",
+            variable=self.encode_mode_var,
+            command=self._sync_encode_mode,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkRadioButton(
+            mode_row,
+            text="CRF",
+            value="crf",
+            variable=self.encode_mode_var,
+            command=self._sync_encode_mode,
+        ).pack(side="left")
+        crf_row = ctk.CTkFrame(frame, fg_color="transparent")
+        crf_row.pack(anchor="w", padx=12, pady=(6, 8))
+        ctk.CTkLabel(crf_row, text="CRF").pack(side="left", padx=(0, 8))
+        self.crf_entry = ctk.CTkEntry(crf_row, textvariable=self.crf_var, width=70)
+        self.crf_entry.pack(side="left")
+        self.crf_entry.bind("<FocusOut>", lambda _e: self._validate_crf())
+        self.crf_entry.bind("<Return>", lambda _e: self._validate_crf())
         ctk.CTkCheckBox(frame, text="Copy audio (AAC 128k / copy if AAC)", variable=self.copy_audio_var).pack(
             anchor="w", padx=12, pady=4
         )
         ctk.CTkCheckBox(frame, text="Allow upscale", variable=self.allow_upscale_var).pack(
-            anchor="w", padx=12, pady=4
+            anchor="w", padx=12, pady=(4, 10)
         )
 
     def _style_tree(self) -> None:
@@ -386,6 +419,8 @@ class MP4ADPLadderApp(ctk.CTk):
         self.overwrite_var.trace_add("write", lambda *_: self._persist())
         self.copy_audio_var.trace_add("write", lambda *_: self._persist())
         self.allow_upscale_var.trace_add("write", lambda *_: self._persist())
+        self.encode_mode_var.trace_add("write", lambda *_: self._persist())
+        self._sync_encode_mode()
         for var in self.fps_vars.values():
             var.trace_add("write", lambda *_: self._persist())
         for var in self.rung_enable.values():
@@ -426,6 +461,8 @@ class MP4ADPLadderApp(ctk.CTk):
             allow_upscale=bool(self.allow_upscale_var.get()),
             recursive_folder=bool(self.recursive_var.get()),
             output_dir=self.output_var.get().strip(),
+            encode_mode=self.encode_mode_var.get() or "abr",
+            crf=self._crf_value(),
         )
 
     def _persist(self) -> None:
@@ -457,6 +494,25 @@ class MP4ADPLadderApp(ctk.CTk):
             self.rung_kbps[rung.id].set(str(rung.bitrate_k))
         self._persist()
         self._log("Ladder reset to Tableau 1 midpoint bitrates.")
+
+    def _crf_value(self) -> float:
+        try:
+            value = float(self.crf_var.get().replace(",", "."))
+        except ValueError:
+            value = DEFAULT_CRF
+        if value != value:
+            value = DEFAULT_CRF
+        return max(0.0, min(51.0, value))
+
+    def _validate_crf(self) -> None:
+        value = self._crf_value()
+        self.crf_var.set(_fmt_num(value))
+        self._persist()
+
+    def _sync_encode_mode(self) -> None:
+        crf = self.encode_mode_var.get() == "crf"
+        self.crf_entry.configure(state="normal" if crf else "disabled")
+        self._persist()
 
     def _clip_duration(self) -> float:
         try:
@@ -631,6 +687,8 @@ class MP4ADPLadderApp(ctk.CTk):
             allow_upscale=self.cfg.allow_upscale,
             copy_audio=self.cfg.copy_audio,
             log=self._log,
+            encode_mode=self.cfg.encode_mode,
+            crf=self.cfg.crf,
         )
         if not jobs:
             self._log("Nothing to encode.")
@@ -654,7 +712,12 @@ class MP4ADPLadderApp(ctk.CTk):
         self.global_label.configure(text=f"0 / {self._run_total} jobs")
         self.file_label.configure(text="")
         self.ffmpeg_line.configure(text="")
-        self._log(f"Queue: {len(jobs)} job(s)  (files × rungs × fps)")
+        if self.cfg.encode_mode == "crf":
+            self._log(
+                f"Queue: {len(jobs)} job(s)  CRF {format_crf_tag(self.cfg.crf)}  (files × rungs × fps)"
+            )
+        else:
+            self._log(f"Queue: {len(jobs)} job(s)  2-pass ABR  (files × rungs × fps)")
         self._running_controls(True)
         self.controller.start(jobs, self.tools)
 
@@ -740,9 +803,17 @@ class MP4ADPLadderApp(ctk.CTk):
             self._set_status(key, f"encoding {job.rung_id} {job.fps}fps ({done}/{total})")
             self.file_label.configure(text=f"{job.source_name}  →  {job.output.name}")
             self.global_label.configure(
-                text=f"{self._run_finished} / {self._run_total}  |  {job.rung_id} {job.fps}fps pass 1/2"
+                text=(
+                    f"{self._run_finished} / {self._run_total}  |  {job.rung_id} {job.fps}fps "
+                    f"pass 1/{job.pass_total}"
+                )
             )
-            self._log(f"Start {job.output.name}  {job.width}x{job.height}  {job.bitrate_k}k  2-pass")
+            if job.mode == "crf":
+                self._log(
+                    f"Start {job.output.name}  {job.width}x{job.height}  CRF {format_crf_tag(job.crf)}"
+                )
+            else:
+                self._log(f"Start {job.output.name}  {job.width}x{job.height}  {job.bitrate_k}k  2-pass")
         elif kind == "job_progress":
             job = event[1]
             prog: EncodeProgress = event[2]
@@ -781,7 +852,8 @@ class MP4ADPLadderApp(ctk.CTk):
             )
 
     def _apply_progress(self, job: EncodeJob, prog: EncodeProgress) -> None:
-        job_frac = ((prog.pass_index - 1) + prog.fraction) / 2.0
+        total = max(1, prog.pass_total)
+        job_frac = ((prog.pass_index - 1) + prog.fraction) / total
         if self._run_total:
             overall = (self._run_finished + job_frac) / self._run_total
             self.global_bar.set(max(0.0, min(1.0, overall)))

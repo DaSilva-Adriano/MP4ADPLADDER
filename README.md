@@ -37,9 +37,9 @@ Each rung is `source → that resolution` with `scale=W:H:flags=lanczos` (even d
 
 - `libx265`, `yuv420p`, Main, `-tag:v hvc1`, `+faststart`
 - Video only (`-an`) unless **Copy audio**: AAC 128k, or `-c:a copy` if the source is already AAC
-- `-preset medium`, 2-pass x265 (`pass=1` to `NUL`, `pass=2` to file)
-- Unique stats file per job (temp dir, then deleted)
-- `-maxrate 1.25*b:v`, `-bufsize 2*b:v`
+- `-preset medium`
+- **ABR** (default): 2-pass x265 (`pass=1` to `NUL`, `pass=2` to file), unique stats file per job, `-maxrate 1.25*b:v`, `-bufsize 2*b:v`
+- **CRF**: single-pass `-crf` (default **18**). Same CRF on every enabled rung. The `adp` token in the filename is replaced by `crf`.
 
 ## FPS
 
@@ -67,8 +67,11 @@ Default output dir: `./output` next to the first source (browsable).
 
 ```
 {stem}_adp-{rung}-{fps}fps.mp4
+{stem}_crf-{rung}-{fps}fps.mp4
 film_adp-720p-24fps.mp4
 film_adp-4k-24fps.mp4
+film_crf-720p-24fps.mp4
+film_crf-4k-24fps.mp4
 ```
 
 Existing files are skipped unless **Overwrite** is checked.
