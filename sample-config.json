@@ -1,0 +1,23 @@
+{
+  "ffmpeg_dir": "C:\\VSR\\ffmpeg-9.0.1-full_build\\bin",
+  "rungs": [
+    {"id": "360p", "width": 640, "height": 360, "gb_h_min": 0.2, "gb_h_max": 0.5, "bitrate_k": 778, "enabled": true},
+    {"id": "480p", "width": 854, "height": 480, "gb_h_min": 0.5, "gb_h_max": 1.0, "bitrate_k": 1667, "enabled": true},
+    {"id": "720p", "width": 1280, "height": 720, "gb_h_min": 1.0, "gb_h_max": 2.5, "bitrate_k": 3890, "enabled": true},
+    {"id": "1080p", "width": 1920, "height": 1080, "gb_h_min": 2.5, "gb_h_max": 4.0, "bitrate_k": 7222, "enabled": true},
+    {"id": "4k", "width": 3840, "height": 2160, "gb_h_min": 8.0, "gb_h_max": 15.0, "bitrate_k": 25556, "enabled": true}
+  ],
+  "fps_targets": {
+    "24": true,
+    "30": false,
+    "50": false,
+    "60": false
+  },
+  "clip_duration_s": 10,
+  "clip_mode": "middle",
+  "copy_audio": false,
+  "overwrite": false,
+  "allow_upscale": false,
+  "recursive_folder": false,
+  "output_dir": ""
+}

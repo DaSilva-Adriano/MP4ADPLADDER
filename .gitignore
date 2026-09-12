@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+output/
+.python-version
+*.stats
+x265-2pass.log*
