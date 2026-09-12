@@ -29,13 +29,14 @@ class EncodeJob:
     clip_duration: float
     output: Path
     audio_mode: str  # "none" | "copy" | "aac"
-    mode: str = "abr"  # "abr" | "crf"
+    mode: str = "abr"  # "abr" | "crf" | "lossless"
     crf: float = 18.0
+    apply_clip: bool = True
     pass_index: int = 1
 
     @property
     def pass_total(self) -> int:
-        return 1 if self.mode == "crf" else 2
+        return 1 if self.mode in {"crf", "lossless"} else 2
 
 
 @dataclass
@@ -100,6 +101,12 @@ def _filtergraph(width: int, height: int, fps: int) -> str:
     return f"scale={w}:{h}:flags=lanczos,fps={int(fps)}"
 
 
+def _lossless_filtergraph(width: int, height: int, fps: int) -> str:
+    w = even_dim(max(2, width))
+    h = even_dim(max(2, height))
+    return f"zscale={w}:{h}:filter=lanczos,fps={int(fps)}"
+
+
 def _x265_params(pass_index: int, stats_name: str) -> str:
     return f"pass={pass_index}:stats={stats_name}"
 
@@ -125,8 +132,10 @@ def build_ffmpeg_cmd(
     stats_name: str,
     output_target: str,
 ) -> list[str]:
-    pre, post = seek_args(job.clip_start, job.clip_duration)
-    vf = _filtergraph(job.width, job.height, job.fps)
+    if job.apply_clip:
+        pre, post = seek_args(job.clip_start, job.clip_duration)
+    else:
+        pre, post = [], []
     cmd: list[str] = [
         str(ffmpeg),
         "-hide_banner",
@@ -139,6 +148,26 @@ def build_ffmpeg_cmd(
     cmd.extend(pre)
     cmd.extend(["-i", str(job.source)])
     cmd.extend(post)
+    if job.mode == "lossless":
+        cmd.extend(
+            [
+                "-map",
+                "0:v:0",
+                "-vf",
+                _lossless_filtergraph(job.width, job.height, job.fps),
+                "-c:v",
+                "libx265",
+                "-x265-params",
+                "lossless=1",
+                "-tag:v",
+                "hvc1",
+            ]
+        )
+        cmd.extend(_audio_args(job))
+        cmd.extend(["-movflags", "+faststart", output_target])
+        return cmd
+
+    vf = _filtergraph(job.width, job.height, job.fps)
     cmd.extend(
         [
             "-map",
@@ -365,7 +394,7 @@ def encode_job(
     holder: ProcHolder,
     on_progress,
 ) -> EncodeResult:
-    """ABR: pass 1 to NUL, pass 2 to file. CRF: single pass to file."""
+    """ABR: 2-pass. CRF / lossless: single pass to file."""
     work_dir.mkdir(parents=True, exist_ok=True)
     job.output.parent.mkdir(parents=True, exist_ok=True)
     stats_name = "x265-2pass.log"
@@ -374,7 +403,7 @@ def encode_job(
     if cancel.is_set():
         return EncodeResult(ok=False, cancelled=True, message="Cancelled")
 
-    if job.mode == "crf":
+    if job.mode in {"crf", "lossless"}:
         cmd = build_ffmpeg_cmd(ffmpeg, job, 1, stats_name, out_path)
         result = _run_one_pass(
             cmd, work_dir, 1, job.clip_duration, cancel, holder, on_progress, pass_total=1
@@ -383,7 +412,8 @@ def encode_job(
             _remove_if_exists(job.output)
             return result
         if not job.output.is_file():
-            return EncodeResult(ok=False, message="CRF encode finished but output file is missing")
+            kind = "Lossless" if job.mode == "lossless" else "CRF"
+            return EncodeResult(ok=False, message=f"{kind} encode finished but output file is missing")
         return result
 
     cmd1 = build_ffmpeg_cmd(ffmpeg, job, 1, stats_name, NUL)

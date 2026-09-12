@@ -164,17 +164,18 @@ def plan_jobs(
     crf: float = 18.0,
 ) -> list[EncodeJob]:
     jobs: list[EncodeJob] = []
-    mode = "crf" if encode_mode == "crf" else "abr"
-    if mode == "crf":
+    if encode_mode == "lossless":
+        mode = "lossless"
         enabled_rungs = [r for r in rungs if r.enabled]
-        if not enabled_rungs:
-            log("No enabled rungs.")
-            return jobs
+    elif encode_mode == "crf":
+        mode = "crf"
+        enabled_rungs = [r for r in rungs if r.enabled]
     else:
+        mode = "abr"
         enabled_rungs = [r for r in rungs if r.enabled and r.bitrate_k > 0]
-        if not enabled_rungs:
-            log("No enabled rungs with bitrate > 0.")
-            return jobs
+    if not enabled_rungs:
+        log("No enabled rungs.")
+        return jobs
     if not fps_targets:
         log("No FPS targets checked.")
         return jobs
@@ -229,7 +230,13 @@ def plan_jobs(
                         f"{info.fps:.3f} fps < {fps} - 0.5 (never up-convert fps)"
                     )
                     continue
-                name = output_name(stem, rung.id, fps, crf=crf if mode == "crf" else None)
+                name = output_name(
+                    stem,
+                    rung.id,
+                    fps,
+                    crf=crf if mode == "crf" else None,
+                    lossless=mode == "lossless",
+                )
                 dest = output_dir / name
                 if dest.exists() and not overwrite:
                     log(f"Skip existing {name} (overwrite off)")
@@ -242,12 +249,12 @@ def plan_jobs(
                         rung_id=rung.id,
                         width=rung.width,
                         height=rung.height,
-                        bitrate_k=rung.bitrate_k,
+                        bitrate_k=0 if mode == "lossless" else rung.bitrate_k,
                         fps=fps,
                         clip_start=clip.start_s,
                         clip_duration=clip.duration_s,
                         output=dest,
-                        audio_mode=audio_mode,
+                        audio_mode="copy" if mode == "lossless" else audio_mode,
                         mode=mode,
                         crf=float(crf),
                     )

@@ -13,7 +13,7 @@ from mp4adpladder.ladder import FPS_CHOICES, RungState, default_rungs, rungs_fro
 APP_NAME = "MP4ADPLADDER"
 DEFAULT_FFMPEG_DIR = r"C:\VSR\ffmpeg-9.0.1-full_build\bin"
 CLIP_MODES = ("middle", "start", "end")
-ENCODE_MODES = ("abr", "crf")
+ENCODE_MODES = ("abr", "crf", "lossless")
 DEFAULT_CRF = 18.0
 VIDEO_EXTENSIONS = (".mkv", ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mxf", ".hevc", ".y4m")
 
@@ -93,6 +93,8 @@ class AppConfig:
         if duration <= 0:
             duration = 10.0
         encode_mode = str(data.get("encode_mode", "abr")).lower()
+        if bool(data.get("lossless", data.get("lossless_1080p", False))):
+            encode_mode = "lossless"
         if encode_mode not in ENCODE_MODES:
             encode_mode = "abr"
         crf = _parse_crf(data.get("crf", DEFAULT_CRF))

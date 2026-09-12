@@ -31,10 +31,13 @@ from mp4adpladder.naming import default_output_dir, format_crf_tag
 from mp4adpladder.probe import ProbeError, ProbeInfo, collect_video_files, probe_file
 from mp4adpladder.timefmt import format_fps, format_hms
 
-HELP_TEXT = """ABR (default): bitrates = Tableau 1 midpoints (streaming GB/h).
+HELP_TEXT = """Pick one encode mode — ABR, CRF, or Lossless — never combined.
+ABR (default): bitrates = Tableau 1 midpoints (streaming GB/h).
 2-pass ABR ≈ constant average rate.
 CRF: single-pass x265, default CRF 18 (0 = lossless-ish, 51 = worst). Same CRF
 at every enabled resolution. CRF files use _crf- in the name (not _adp-).
+Lossless: every enabled rung from the source (zscale=W:H:filter=lanczos,
+libx265 lossless=1, -c:a copy). Names use _lossless- not _adp-.
 
 Later VSR reference = the adp-4k file from the SAME source and clip window.
 
@@ -49,7 +52,8 @@ FPS is never up-converted. A target is used only if source_fps ≥ target − 0.
 Clip default is 10 s, middle of the file. Seek uses fast input -ss with a 10 s
 preroll plus an accurate post-input -ss (covers keyframe drift > 0.25 s).
 
-Outputs: {stem}_adp-{rung}-{fps}fps.mp4   or   {stem}_crf-{rung}-{fps}fps.mp4
+Outputs: {stem}_adp-{rung}-{fps}fps.mp4  |  {stem}_crf-{rung}-{fps}fps.mp4
+         {stem}_lossless-{rung}-{fps}fps.mp4
 """
 
 VIDEO_FILETYPES = (
@@ -98,7 +102,9 @@ class MP4ADPLadderApp(ctk.CTk):
         self.overwrite_var = ctk.BooleanVar(value=self.cfg.overwrite)
         self.copy_audio_var = ctk.BooleanVar(value=self.cfg.copy_audio)
         self.allow_upscale_var = ctk.BooleanVar(value=self.cfg.allow_upscale)
-        self.encode_mode_var = ctk.StringVar(value=self.cfg.encode_mode if self.cfg.encode_mode in {"abr", "crf"} else "abr")
+        self.encode_mode_var = ctk.StringVar(
+            value=self.cfg.encode_mode if self.cfg.encode_mode in {"abr", "crf", "lossless"} else "abr"
+        )
         self.crf_var = ctk.StringVar(value=_fmt_num(self.cfg.crf if self.cfg.crf is not None else DEFAULT_CRF))
         self.clip_mode_var = ctk.StringVar(value=self.cfg.clip_mode)
         self.clip_dur_var = ctk.StringVar(value=_fmt_num(self.cfg.clip_duration_s))
@@ -370,6 +376,13 @@ class MP4ADPLadderApp(ctk.CTk):
             mode_row,
             text="CRF",
             value="crf",
+            variable=self.encode_mode_var,
+            command=self._sync_encode_mode,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkRadioButton(
+            mode_row,
+            text="Lossless",
+            value="lossless",
             variable=self.encode_mode_var,
             command=self._sync_encode_mode,
         ).pack(side="left")
@@ -716,6 +729,8 @@ class MP4ADPLadderApp(ctk.CTk):
             self._log(
                 f"Queue: {len(jobs)} job(s)  CRF {format_crf_tag(self.cfg.crf)}  (files × rungs × fps)"
             )
+        elif self.cfg.encode_mode == "lossless":
+            self._log(f"Queue: {len(jobs)} job(s)  lossless  (files × rungs × fps)")
         else:
             self._log(f"Queue: {len(jobs)} job(s)  2-pass ABR  (files × rungs × fps)")
         self._running_controls(True)
@@ -811,6 +826,10 @@ class MP4ADPLadderApp(ctk.CTk):
             if job.mode == "crf":
                 self._log(
                     f"Start {job.output.name}  {job.width}x{job.height}  CRF {format_crf_tag(job.crf)}"
+                )
+            elif job.mode == "lossless":
+                self._log(
+                    f"Start {job.output.name}  zscale {job.rung_id} {job.width}x{job.height}  x265 lossless=1"
                 )
             else:
                 self._log(f"Start {job.output.name}  {job.width}x{job.height}  {job.bitrate_k}k  2-pass")

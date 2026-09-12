@@ -1,4 +1,4 @@
-"""Output filenames: {stem}_adp-{rung}-{fps}fps.mp4 or {stem}_crf-{rung}-{fps}fps.mp4"""
+"""Output filenames: {stem}_{adp|crf|lossless}-{rung}-{fps}fps.mp4"""
 
 from __future__ import annotations
 
@@ -26,8 +26,19 @@ def format_crf_tag(crf: float) -> str:
     return f"{crf:.2f}".rstrip("0").rstrip(".")
 
 
-def output_name(stem: str, rung_id: str, fps: int, crf: float | None = None) -> str:
-    tag = "crf" if crf is not None else "adp"
+def output_name(
+    stem: str,
+    rung_id: str,
+    fps: int,
+    crf: float | None = None,
+    lossless: bool = False,
+) -> str:
+    if lossless:
+        tag = "lossless"
+    elif crf is not None:
+        tag = "crf"
+    else:
+        tag = "adp"
     return f"{sanitize_stem(stem)}_{tag}-{rung_id}-{int(fps)}fps.mp4"
 
 
