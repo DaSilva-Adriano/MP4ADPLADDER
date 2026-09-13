@@ -1,4 +1,4 @@
-"""Output filenames: {stem}_{adp|crf|lossless}-{rung}-{fps}fps.mp4"""
+"""Output filenames: {stem}_{adp|crf|lossless}-{rung}-{fps}fps.mp4 or {stem}_crf-{value}.mp4."""
 
 from __future__ import annotations
 
@@ -32,7 +32,10 @@ def output_name(
     fps: int,
     crf: float | None = None,
     lossless: bool = False,
+    crf_only: bool = False,
 ) -> str:
+    if crf_only:
+        return f"{sanitize_stem(stem)}_crf-{format_crf_tag(crf if crf is not None else 18.0)}.mp4"
     if lossless:
         tag = "lossless"
     elif crf is not None:

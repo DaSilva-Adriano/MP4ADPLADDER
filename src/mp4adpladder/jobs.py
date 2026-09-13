@@ -151,6 +151,74 @@ class JobController:
             self._emit(("job_error", job, result))
 
 
+def _audio_mode(src: SourceEntry, info: ProbeInfo, copy_audio: bool, log: Callable[[str], None]) -> str:
+    audio_mode = "none"
+    if copy_audio:
+        if not info.has_audio:
+            log(f"{src.path.name}: copy audio checked but no audio stream — encoding video only")
+        elif info.audio_is_aac:
+            audio_mode = "copy"
+        else:
+            audio_mode = "aac"
+            log(
+                f"{src.path.name}: audio codec {info.audio_codec!r} is not AAC — transcoding to AAC 128k"
+            )
+    return audio_mode
+
+
+def _plan_crf_only_jobs(
+    sources: list[SourceEntry],
+    output_dir: Path,
+    overwrite: bool,
+    copy_audio: bool,
+    log: Callable[[str], None],
+    crf: float,
+) -> list[EncodeJob]:
+    jobs: list[EncodeJob] = []
+    for src in sources:
+        info = src.probe
+        if info is None:
+            if src.status == "probing":
+                log(f"Skip {src.path.name}: still probing")
+            elif src.error:
+                log(f"Skip {src.path.name}: {src.error}")
+            else:
+                log(f"Skip {src.path.name}: not probed")
+            continue
+        if not info.has_video:
+            log(f"Skip {src.path.name}: audio-only")
+            continue
+        stem = sanitize_stem(src.path.name)
+        audio_mode = _audio_mode(src, info, copy_audio, log)
+        name = output_name(stem, "src", 0, crf=crf, crf_only=True)
+        dest = output_dir / name
+        if dest.exists() and not overwrite:
+            log(f"Skip existing {name} (overwrite off)")
+            continue
+        fps = int(round(info.fps)) if info.fps > 0 else 0
+        jobs.append(
+            EncodeJob(
+                job_id=uuid.uuid4().hex[:12],
+                source=src.path,
+                source_name=src.path.name,
+                rung_id="src",
+                width=info.width,
+                height=info.height,
+                bitrate_k=0,
+                fps=fps,
+                clip_start=0.0,
+                clip_duration=info.duration_s if info.duration_s > 0 else 0.0,
+                output=dest,
+                audio_mode=audio_mode,
+                mode="crf",
+                crf=float(crf),
+                apply_clip=False,
+                keep_source=True,
+            )
+        )
+    return jobs
+
+
 def plan_jobs(
     sources: list[SourceEntry],
     rungs: list[RungState],
@@ -162,7 +230,11 @@ def plan_jobs(
     log: Callable[[str], None],
     encode_mode: str = "abr",
     crf: float = 18.0,
+    crf_only: bool = False,
 ) -> list[EncodeJob]:
+    if crf_only:
+        return _plan_crf_only_jobs(sources, output_dir, overwrite, copy_audio, log, crf)
+
     jobs: list[EncodeJob] = []
     if encode_mode == "lossless":
         mode = "lossless"
@@ -198,17 +270,7 @@ def plan_jobs(
             log(f"Skip {src.path.name}: invalid clip window")
             continue
         stem = sanitize_stem(src.path.name)
-        audio_mode = "none"
-        if copy_audio:
-            if not info.has_audio:
-                log(f"{src.path.name}: copy audio checked but no audio stream — encoding video only")
-            elif info.audio_is_aac:
-                audio_mode = "copy"
-            else:
-                audio_mode = "aac"
-                log(
-                    f"{src.path.name}: audio codec {info.audio_codec!r} is not AAC — transcoding to AAC 128k"
-                )
+        audio_mode = _audio_mode(src, info, copy_audio, log)
 
         for rung in enabled_rungs:
             too_wide = info.width > 0 and info.width < rung.width

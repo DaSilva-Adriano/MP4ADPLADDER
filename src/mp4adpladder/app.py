@@ -36,6 +36,9 @@ ABR (default): bitrates = Tableau 1 midpoints (streaming GB/h).
 2-pass ABR ≈ constant average rate.
 CRF: single-pass x265, default CRF 18 (0 = lossless-ish, 51 = worst). Same CRF
 at every enabled resolution. CRF files use _crf- in the name (not _adp-).
+CRF only (off by default): one encode per file at the CRF value. Source
+resolution, fps, and duration are left unchanged (no scale, fps filter, or
+clip). Names are {stem}_crf-{value}.mp4. Ladder / FPS / clip are ignored.
 Lossless: every enabled rung from the source (zscale=W:H:filter=lanczos,
 libx265 lossless=1, -c:a copy). Names use _lossless- not _adp-.
 
@@ -53,7 +56,7 @@ Clip default is 10 s, middle of the file. Seek uses fast input -ss with a 10 s
 preroll plus an accurate post-input -ss (covers keyframe drift > 0.25 s).
 
 Outputs: {stem}_adp-{rung}-{fps}fps.mp4  |  {stem}_crf-{rung}-{fps}fps.mp4
-         {stem}_lossless-{rung}-{fps}fps.mp4
+         {stem}_crf-{value}.mp4  |  {stem}_lossless-{rung}-{fps}fps.mp4
 """
 
 VIDEO_FILETYPES = (
@@ -106,6 +109,7 @@ class MP4ADPLadderApp(ctk.CTk):
             value=self.cfg.encode_mode if self.cfg.encode_mode in {"abr", "crf", "lossless"} else "abr"
         )
         self.crf_var = ctk.StringVar(value=_fmt_num(self.cfg.crf if self.cfg.crf is not None else DEFAULT_CRF))
+        self.crf_only_var = ctk.BooleanVar(value=self.cfg.crf_only)
         self.clip_mode_var = ctk.StringVar(value=self.cfg.clip_mode)
         self.clip_dur_var = ctk.StringVar(value=_fmt_num(self.cfg.clip_duration_s))
         self.fps_vars = {
@@ -365,34 +369,34 @@ class MP4ADPLadderApp(ctk.CTk):
         )
         mode_row = ctk.CTkFrame(frame, fg_color="transparent")
         mode_row.pack(anchor="w", padx=12)
-        ctk.CTkRadioButton(
-            mode_row,
-            text="ABR (2-pass)",
-            value="abr",
-            variable=self.encode_mode_var,
-            command=self._sync_encode_mode,
-        ).pack(side="left", padx=(0, 12))
-        ctk.CTkRadioButton(
-            mode_row,
-            text="CRF",
-            value="crf",
-            variable=self.encode_mode_var,
-            command=self._sync_encode_mode,
-        ).pack(side="left", padx=(0, 12))
-        ctk.CTkRadioButton(
-            mode_row,
-            text="Lossless",
-            value="lossless",
-            variable=self.encode_mode_var,
-            command=self._sync_encode_mode,
-        ).pack(side="left")
+        self.encode_radios: list[ctk.CTkRadioButton] = []
+        for text, value, padx in (
+            ("ABR (2-pass)", "abr", (0, 12)),
+            ("CRF", "crf", (0, 12)),
+            ("Lossless", "lossless", (0, 0)),
+        ):
+            radio = ctk.CTkRadioButton(
+                mode_row,
+                text=text,
+                value=value,
+                variable=self.encode_mode_var,
+                command=self._sync_encode_mode,
+            )
+            radio.pack(side="left", padx=padx)
+            self.encode_radios.append(radio)
         crf_row = ctk.CTkFrame(frame, fg_color="transparent")
-        crf_row.pack(anchor="w", padx=12, pady=(6, 8))
+        crf_row.pack(anchor="w", padx=12, pady=(6, 4))
         ctk.CTkLabel(crf_row, text="CRF").pack(side="left", padx=(0, 8))
         self.crf_entry = ctk.CTkEntry(crf_row, textvariable=self.crf_var, width=70)
         self.crf_entry.pack(side="left")
         self.crf_entry.bind("<FocusOut>", lambda _e: self._validate_crf())
         self.crf_entry.bind("<Return>", lambda _e: self._validate_crf())
+        ctk.CTkCheckBox(
+            frame,
+            text="CRF only (keep source res, fps, duration)",
+            variable=self.crf_only_var,
+            command=self._sync_encode_mode,
+        ).pack(anchor="w", padx=12, pady=(0, 8))
         ctk.CTkCheckBox(frame, text="Copy audio (AAC 128k / copy if AAC)", variable=self.copy_audio_var).pack(
             anchor="w", padx=12, pady=4
         )
@@ -433,6 +437,7 @@ class MP4ADPLadderApp(ctk.CTk):
         self.copy_audio_var.trace_add("write", lambda *_: self._persist())
         self.allow_upscale_var.trace_add("write", lambda *_: self._persist())
         self.encode_mode_var.trace_add("write", lambda *_: self._persist())
+        self.crf_only_var.trace_add("write", lambda *_: self._persist())
         self._sync_encode_mode()
         for var in self.fps_vars.values():
             var.trace_add("write", lambda *_: self._persist())
@@ -476,6 +481,7 @@ class MP4ADPLadderApp(ctk.CTk):
             output_dir=self.output_var.get().strip(),
             encode_mode=self.encode_mode_var.get() or "abr",
             crf=self._crf_value(),
+            crf_only=bool(self.crf_only_var.get()),
         )
 
     def _persist(self) -> None:
@@ -523,8 +529,12 @@ class MP4ADPLadderApp(ctk.CTk):
         self._persist()
 
     def _sync_encode_mode(self) -> None:
-        crf = self.encode_mode_var.get() == "crf"
+        crf_only = bool(self.crf_only_var.get())
+        crf = crf_only or self.encode_mode_var.get() == "crf"
         self.crf_entry.configure(state="normal" if crf else "disabled")
+        radio_state = "disabled" if crf_only else "normal"
+        for radio in getattr(self, "encode_radios", []):
+            radio.configure(state=radio_state)
         self._persist()
 
     def _clip_duration(self) -> float:
@@ -702,6 +712,7 @@ class MP4ADPLadderApp(ctk.CTk):
             log=self._log,
             encode_mode=self.cfg.encode_mode,
             crf=self.cfg.crf,
+            crf_only=self.cfg.crf_only,
         )
         if not jobs:
             self._log("Nothing to encode.")
@@ -725,7 +736,12 @@ class MP4ADPLadderApp(ctk.CTk):
         self.global_label.configure(text=f"0 / {self._run_total} jobs")
         self.file_label.configure(text="")
         self.ffmpeg_line.configure(text="")
-        if self.cfg.encode_mode == "crf":
+        if self.cfg.crf_only:
+            self._log(
+                f"Queue: {len(jobs)} job(s)  CRF only {format_crf_tag(self.cfg.crf)}  "
+                "(one encode per file, source as-is)"
+            )
+        elif self.cfg.encode_mode == "crf":
             self._log(
                 f"Queue: {len(jobs)} job(s)  CRF {format_crf_tag(self.cfg.crf)}  (files × rungs × fps)"
             )
@@ -815,15 +831,21 @@ class MP4ADPLadderApp(ctk.CTk):
             key = str(job.source)
             done = self._file_finished.get(key, 0)
             total = self._file_totals.get(key, 1)
-            self._set_status(key, f"encoding {job.rung_id} {job.fps}fps ({done}/{total})")
+            if job.keep_source:
+                self._set_status(key, f"encoding CRF {format_crf_tag(job.crf)} ({done}/{total})")
+            else:
+                self._set_status(key, f"encoding {job.rung_id} {job.fps}fps ({done}/{total})")
             self.file_label.configure(text=f"{job.source_name}  →  {job.output.name}")
+            job_label = "source" if job.keep_source else f"{job.rung_id} {job.fps}fps"
             self.global_label.configure(
-                text=(
-                    f"{self._run_finished} / {self._run_total}  |  {job.rung_id} {job.fps}fps "
-                    f"pass 1/{job.pass_total}"
-                )
+                text=f"{self._run_finished} / {self._run_total}  |  {job_label} pass 1/{job.pass_total}"
             )
-            if job.mode == "crf":
+            if job.keep_source:
+                self._log(
+                    f"Start {job.output.name}  {job.width}x{job.height}  CRF {format_crf_tag(job.crf)}  "
+                    "(source as-is)"
+                )
+            elif job.mode == "crf":
                 self._log(
                     f"Start {job.output.name}  {job.width}x{job.height}  CRF {format_crf_tag(job.crf)}"
                 )
@@ -881,8 +903,9 @@ class MP4ADPLadderApp(ctk.CTk):
         file_total = max(1, self._file_totals.get(key, 1))
         self.file_bar.set(max(0.0, min(1.0, (file_done + job_frac) / file_total)))
         self.ffmpeg_line.configure(text=prog.last_line[:180])
+        job_label = "source" if job.keep_source else f"{job.rung_id} {job.fps}fps"
         self.global_label.configure(
-            text=f"{self._run_finished} / {self._run_total}  |  {job.rung_id} {job.fps}fps  {prog.last_line}"
+            text=f"{self._run_finished} / {self._run_total}  |  {job_label}  {prog.last_line}"
         )
 
     def _finish_job(self, job: EncodeJob, status: str) -> None:

@@ -40,9 +40,10 @@ Each rung is `source → that resolution` with `scale=W:H:flags=lanczos` (even d
 - `-preset medium`
 - **ABR** (default): 2-pass x265 (`pass=1` to `NUL`, `pass=2` to file), unique stats file per job, `-maxrate 1.25*b:v`, `-bufsize 2*b:v`
 - **CRF**: single-pass `-crf` (default **18**). Same CRF on every enabled rung. The `adp` token in the filename is replaced by `crf`.
+- **CRF only** (off by default): one encode per source at the CRF value. Resolution, fps, and duration are unchanged (no `scale`, no `fps` filter, no clip window). Output is `{stem}_crf-{value}.mp4`. Ladder, FPS targets, and clip are ignored.
 - **Lossless**: every enabled rung from the source with `zscale=W:H:filter=lanczos`, `-c:v libx265 -x265-params lossless=1`, `-tag:v hvc1`, `+faststart`, `-c:a copy`.
 
-ABR, CRF, and Lossless are exclusive — one Start run uses only the selected mode.
+ABR, CRF, and Lossless are exclusive — one Start run uses only the selected mode. **CRF only** overrides them when checked.
 
 ## FPS
 
@@ -50,7 +51,7 @@ Default **24**. Checkboxes: 24, 30, 50, 60.
 
 A target fps is used only if `source_fps >= target - 0.5`. Never up-convert. A 23.976 source may output 24. Checking 60 on a 24 fps source skips 60 and logs why.
 
-One output file per `(source × enabled rung × allowed fps)`.
+One output file per `(source × enabled rung × allowed fps)`, except **CRF only** which is one file per source.
 
 ## Clip window
 
@@ -71,10 +72,12 @@ Default output dir: `./output` next to the first source (browsable).
 ```
 {stem}_adp-{rung}-{fps}fps.mp4
 {stem}_crf-{rung}-{fps}fps.mp4
+{stem}_crf-{value}.mp4
 {stem}_lossless-{rung}-{fps}fps.mp4
 film_adp-720p-24fps.mp4
 film_adp-4k-24fps.mp4
 film_crf-720p-24fps.mp4
+film_crf-18.mp4
 film_lossless-4k-24fps.mp4
 film_lossless-1080p-24fps.mp4
 film_lossless-720p-24fps.mp4

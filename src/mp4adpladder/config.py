@@ -50,6 +50,7 @@ class AppConfig:
     output_dir: str = ""
     encode_mode: str = "abr"
     crf: float = DEFAULT_CRF
+    crf_only: bool = False
 
     def enabled_fps(self) -> list[int]:
         out: list[int] = []
@@ -72,6 +73,7 @@ class AppConfig:
             "output_dir": self.output_dir,
             "encode_mode": self.encode_mode,
             "crf": float(self.crf),
+            "crf_only": bool(self.crf_only),
         }
 
     @classmethod
@@ -111,6 +113,7 @@ class AppConfig:
             output_dir=str(data.get("output_dir", "") or ""),
             encode_mode=encode_mode,
             crf=crf,
+            crf_only=bool(data.get("crf_only", False)),
         )
 
 

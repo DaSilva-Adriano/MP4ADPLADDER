@@ -21,5 +21,6 @@
   "recursive_folder": false,
   "output_dir": "",
   "encode_mode": "abr",
-  "crf": 18
+  "crf": 18,
+  "crf_only": false
 }

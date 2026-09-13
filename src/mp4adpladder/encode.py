@@ -32,6 +32,7 @@ class EncodeJob:
     mode: str = "abr"  # "abr" | "crf" | "lossless"
     crf: float = 18.0
     apply_clip: bool = True
+    keep_source: bool = False
     pass_index: int = 1
 
     @property
@@ -167,13 +168,11 @@ def build_ffmpeg_cmd(
         cmd.extend(["-movflags", "+faststart", output_target])
         return cmd
 
-    vf = _filtergraph(job.width, job.height, job.fps)
+    cmd.extend(["-map", "0:v:0"])
+    if not job.keep_source:
+        cmd.extend(["-vf", _filtergraph(job.width, job.height, job.fps)])
     cmd.extend(
         [
-            "-map",
-            "0:v:0",
-            "-vf",
-            vf,
             "-pix_fmt",
             "yuv420p",
             "-c:v",
